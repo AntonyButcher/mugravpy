@@ -49,7 +49,9 @@ class gravreader_new(object):
         self.rawdata = None
         self.basedata = None
         self.drift = None
+        self.topo = None
         self.processing = None
+        
         
     def get_properties(self):
         """
@@ -127,7 +129,30 @@ class gravreader_new(object):
                                     # dates.append(mdates.datestr2num("{date}T{time}".format(date=data.iloc[i].date,time=data.iloc[i].time)))
         self.rawdata=pd.DataFrame(grav_data)
                                     
-                                
+    def check_rawdata(self,station):
+        """
+        Displays individual station reading.
+        """
+        data_tmp=self.rawdata[self.rawdata.station==station]
+        
+        plt.scatter(data_tmp.index.values,data_tmp.grav)
+        
+        plt.scatter(data_tmp.index.values.mean(),data_tmp.grav.mean(),marker='*',s=150)
+        plt.grid()
+        plt.xlabel('Index Value')
+        plt.ylabel('Gal')
+        plt.show()
+    
+    def remove_rawdata(self,indexs=[]):
+        """
+        Removes individual station readings.
+        indexs - list of readings to remove.
+        """
+        
+        for ix in indexs:
+            self.rawdata=self.rawdata.drop(ix)
+        
+    
     def get_basedata(self,base=999):
         """
         Extracts the base station readings and calculates a linear drift
@@ -138,19 +163,25 @@ class gravreader_new(object):
         
         dates=data.dec_timedate
         
-        # dates=[]
-        # for i in range(len(data)):
-        #     dates.append(mdates.datestr2num("{date}T{time}".format(date=data.iloc[i].date,time=data.iloc[i].time)))
-
-        # dates=dates-dates[0]
-        
         popt, pcov = curve_fit(func, dates, data.grav.values)
         print(popt)
         self.drift=popt
+    
+    def get_topo(self, topofile):
+        """
+        Imports the topo data
+        """
+        if self.topo is None:
+            self.topo=pd.read_csv(topofile,usecols=[0,1,2,3],names=('station','height','easting','northing'),skiprows=[0])
+            
+        plt.scatter(self.topo.easting,self.topo.height)
+        plt.xlabel('Easting (m)')
+        plt.ylabel('Height (m)')
+        plt.show()
         
-    def get_processing(self,base=999):
+    def get_processing(self, base=999,rho=1.9):
         
-        grav_proc={'station':[],'grav':[],'time':[],'detrend':[]}
+        grav_proc={'station':[],'grav':[],'dec_timedate':[],'detrend':[]}
         
         data=self.rawdata[self.rawdata.station!=base]
         # print(data)
@@ -162,56 +193,107 @@ class gravreader_new(object):
             date_tmp=data_tmp.dec_timedate.mean()
             
             drift_tmp=date_tmp*self.drift[0]+self.drift[1]
-            # print(drift_tmp)
-            # dates=[]
-            # for i in range(len(data_tmp)):
-            #     dates.append(mdates.datestr2num("{date}T{time}".format(date=data_tmp.iloc[i].date,time=data_tmp.iloc[i].time)))
-            # date_tmp=np.mean(dates)
-            
-            # print(grav_tmp)
-            # print(date_tmp)
-            
-            grav_proc['station'].append(station)
+           
+            grav_proc['station'].append(str(station).split('.')[0])
             grav_proc['grav'].append(grav_tmp)
-            grav_proc['time'].append(date_tmp)
+            grav_proc['dec_timedate'].append(date_tmp)
             grav_proc['detrend'].append(grav_tmp-drift_tmp)
             
-        self.processing=pd.DataFrame(grav_proc)    
+        self.processing=pd.DataFrame(grav_proc)  
         
-                          
-    def plot(self,type='Raw',fig=None):
+        if self.topo is None:
+            print('No topo data present, please use get_topo function.')
+        else:
+            self.processing=self.processing.merge(self.topo,how = 'inner',on='station')
+            
+            self.processing.insert(7,'fc',self.processing.height*0.3086)
+            self.processing.insert(8,'bc',self.processing.height*0.04191*rho)
+            self.processing.insert(9,'ba',self.processing.detrend+self.processing.fc-self.processing.bc)
+        
+    def detrend_ba(self,exclude=[]):
+        
+        data_tmp=self.processing
+        
+        for ix in exclude:
+            data_tmp=data_tmp.drop(ix)
+            
+        popt, pcov = curve_fit(func, data_tmp.easting, data_tmp.ba.values)
+        
+        ymodel=func(self.processing.easting,popt[0],popt[1])
+    
+        plt.figure(figsize=[10,5])
+        plt.plot(self.processing.easting,ymodel,'k--')
+        plt.scatter(self.processing.easting,self.processing.ba)
+        plt.grid()
+        plt.xlabel('Easting')
+        plt.ylabel('Gal')
+        plt.show()
+                   
+        detrend_tmp=self.processing.ba.values-ymodel
+        self.processing['ba_detrend']=detrend_tmp
+        
+        plt.figure(figsize=[10,5])
+        plt.plot(self.processing.easting,self.processing.ba_detrend*1000)
+        plt.scatter(self.processing.easting,self.processing.ba_detrend*1000)
+        plt.grid()
+        plt.xlabel('Easting')
+        plt.ylabel('MicroGal')
+        plt.show()
+            
+            
+            
+    
+    
+    def plot(self,type='raw',xaxis='time',fig=None):
         """
         Plot function
         Arguments:
         type - type of gravity data to plot
+        xaxis - column to use as x-axis
         """
         
         if fig==None:
             fig = plt.figure(figsize=(10,5))
             
-        if type=='Raw':
+        if xaxis=='time':
+            xn='dec_timedate'
+            plt.xlabel('Time in days')
+            
+        if xaxis=='distance':
+            xn='easting'
+            plt.xlabel('Distance (m)')
+            
+        if xaxis=='station':
+            xn='station'
+            plt.xlabel('Station name')
+            
+        if xaxis=='index':
+            xn='index'
+            plt.xlabel('Index')
+            
+            
+        if type=='raw':
             data=self.rawdata
-            dates=data.dec_timedate
-            plt.scatter(dates,data.grav.values,s=5)
+            plt.scatter(data[xn],data.grav.values,s=5)
             
-        if type=='Base':
-            data=self.basedata
-            dates=data.dec_timedate
-            
+        if type=='base':
+            data=self.basedata            
             ymodel=func(dates,self.drift[0],self.drift[1])
-            plt.plot(dates,ymodel,'k--')
-            plt.scatter(dates,data.grav.values)
+            plt.plot(xn,ymodel,'k--')
+            plt.scatter(data[xn],data.grav.values)
             
-        if type=='Processing':
-            data=self.processing
-            dates=data.time
-            
-            plt.scatter(dates,data.detrend.values)
-            
-        plt.xlabel('Time in days')
+        if type=='detrend':
+            data=self.processing            
+            plt.scatter(data[xn],data.detrend.values)
+        
+        if type=='ba':
+            data=self.processing            
+            plt.scatter(data[xn].values,data.ba.values)
+        
         plt.ylabel('Gal')
         plt.grid()
         plt.show() 
+             
         
 class gravreader(object):
     def __init__(self, name):
